@@ -89,6 +89,9 @@ class UnifiedSFTDataset(Dataset):
                 input_buffer = ""
         assert len(input_ids) == len(target_mask)
 
+        if len(input_ids) > self.max_seq_length:
+            logger.info(f"The {index} (0-indexed) token length ({len(input_ids)}) exceeds max_seq_length ({self.max_seq_length}), will be truncated.")
+
         input_ids = input_ids[: self.max_seq_length]
         target_mask = target_mask[: self.max_seq_length]
         attention_mask = [1] * len(input_ids)
