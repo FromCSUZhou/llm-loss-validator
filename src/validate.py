@@ -334,6 +334,7 @@ def validate(
         eval_result = trainer.evaluate()
         eval_loss = eval_result["eval_loss"]
         logger.info("evaluate result is %s" % str(eval_result))
+        logger.info(f"Total number of samples truncated due to exceeding max_seq_length: {eval_dataset.truncated_samples_count if eval_dataset else 'N/A (dataset not loaded)'}")
         if local_test:
             logger.info("The model can be correctly validated by validators.")
             return

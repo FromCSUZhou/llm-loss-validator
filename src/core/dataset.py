@@ -24,6 +24,7 @@ class UnifiedSFTDataset(Dataset):
         logger.info(f'Use template "{self.template_name}" for training')
         logger.info("There are {} data in dataset".format(len(data_list)))
         self.data_list = data_list
+        self.truncated_samples_count = 0
 
     def __len__(self):
         return len(self.data_list)
@@ -91,6 +92,7 @@ class UnifiedSFTDataset(Dataset):
 
         if len(input_ids) > self.max_seq_length:
             logger.info(f"The {index} (0-indexed) token length ({len(input_ids)}) exceeds max_seq_length ({self.max_seq_length}), will be truncated.")
+            self.truncated_samples_count += 1
 
         input_ids = input_ids[: self.max_seq_length]
         target_mask = target_mask[: self.max_seq_length]
