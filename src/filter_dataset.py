@@ -58,6 +58,19 @@ register_template(
     stop_word="<|im_end|>",
 )
 
+# Register phi4 template
+register_template(
+    template_name="phi4",
+    system_format=None,
+    user_format="<|user|>\n{content}<|end|>\n<|assistant|>",
+    assistant_format="{content}<|end|>\n",
+    tool_format="<|tool|>{content}<|/tool|>",
+    function_format="<|tool_call|>{content}<|/tool_call|>",
+    observation_format="<|tool|>\n{content}<|end|>\n<|assistant|>",
+    system=None,
+    stop_word="<|end|>",
+)
+
 def load_tokenizer(model_name_or_path: str) -> AutoTokenizer:
     """Load tokenizer with same logic as validate.py"""
     tokenizer = AutoTokenizer.from_pretrained(
@@ -136,8 +149,95 @@ def calculate_token_length(data, tokenizer, template, max_seq_length):
     
     return len(input_ids)
 
+def filter_dataset_multi_model(input_file, output_file, model_configs, max_seq_length):
+    """Filter dataset to keep only samples with token length < max_seq_length for ALL models
+    
+    Args:
+        input_file: Path to input JSONL file
+        output_file: Path to output JSONL file  
+        model_configs: List of tuples (model_name_or_path, template_name)
+        max_seq_length: Maximum sequence length threshold
+    """
+    
+    # Load tokenizers and templates for all models
+    model_data = []
+    for model_name_or_path, template_name in model_configs:
+        logger.info(f"Loading tokenizer from: {model_name_or_path}")
+        tokenizer = load_tokenizer(model_name_or_path)
+        
+        if template_name not in template_dict.keys():
+            raise ValueError(f"template_name '{template_name}' doesn't exist, available: {template_dict.keys()}")
+        template = template_dict[template_name]
+        
+        model_data.append({
+            'model_name': model_name_or_path,
+            'template_name': template_name,
+            'tokenizer': tokenizer,
+            'template': template
+        })
+        logger.info(f'Loaded model "{model_name_or_path}" with template "{template_name}"')
+    
+    # Load and process data
+    logger.info(f"Loading data from: {input_file}")
+    with open(input_file, 'r', encoding='utf-8') as f:
+        data_lines = f.readlines()
+    
+    logger.info(f"Total samples: {len(data_lines)}")
+    logger.info(f"Filtering with {len(model_configs)} models: {[config[0] for config in model_configs]}")
+    
+    filtered_data = []
+    excluded_counts = {model['model_name']: 0 for model in model_data}
+    total_excluded = 0
+    
+    for idx, line in enumerate(data_lines):
+        data = json.loads(line.strip())
+        
+        try:
+            # Calculate token length for each model
+            token_lengths = {}
+            passes_all_models = True
+            
+            for model in model_data:
+                token_length = calculate_token_length(
+                    data, model['tokenizer'], model['template'], max_seq_length
+                )
+                token_lengths[model['model_name']] = token_length
+                
+                if token_length > max_seq_length:
+                    passes_all_models = False
+                    excluded_counts[model['model_name']] += 1
+            
+            if passes_all_models:
+                filtered_data.append(line.strip())
+            else:
+                total_excluded += 1
+                logger.debug(f"Sample {idx} excluded. Token lengths: {token_lengths}")
+                
+        except Exception as e:
+            logger.warning(f"Error processing sample {idx}: {e}")
+            total_excluded += 1
+            continue
+    
+    # Save filtered data
+    logger.info(f"Saving filtered data to: {output_file}")
+    with open(output_file, 'w', encoding='utf-8') as f:
+        for line in filtered_data:
+            f.write(line + '\n')
+    
+    # Print results
+    logger.info(f"Multi-model filtering complete!")
+    logger.info(f"Original samples: {len(data_lines)}")
+    logger.info(f"Filtered samples: {len(filtered_data)}")
+    logger.info(f"Total excluded samples: {total_excluded}")
+    logger.info(f"Retention rate: {len(filtered_data)/len(data_lines)*100:.2f}%")
+    
+    # Print per-model exclusion counts
+    logger.info(f"Per-model exclusion counts (samples exceeding {max_seq_length} tokens):")
+    for model_name, count in excluded_counts.items():
+        logger.info(f"  {model_name}: {count} samples")
+
 def filter_dataset(input_file, output_file, model_name_or_path, template_name, max_seq_length):
-    """Filter dataset to keep only samples with token length < max_seq_length"""
+    """Filter dataset to keep only samples with token length < max_seq_length (single model)"""
     
     # Load tokenizer
     logger.info(f"Loading tokenizer from: {model_name_or_path}")
@@ -188,23 +288,31 @@ def filter_dataset(input_file, output_file, model_name_or_path, template_name, m
     logger.info(f"Retention rate: {len(filtered_data)/len(data_lines)*100:.2f}%")
 
 if __name__ == "__main__":
-    # Configuration matching test.sh
-    input_file = "/workspace/llm-demo/data_characterX_v2/datasets/character_roleplay_pure_ko_en_20250729_082956.jsonl"
-    output_file = "/workspace/llm-demo/data_characterX_v2/datasets/character_roleplay_pure_ko_en_20250729_082956_filtered.jsonl"
-    model_name_or_path = "Qwen/Qwen2.5-0.5B-Instruct"
-    template_name = "qwen1.5"
+    # Configuration for multi-model filtering
+    input_file = "/workspace/llm-demo/data_characterX_v2/datasets/character_roleplay_pure_all_languages_20250730_065157.jsonl"
+    output_file = "/workspace/llm-demo/data_characterX_v2/datasets/character_roleplay_pure_all_languages_20250730_065157_multi_filtered.jsonl"
+    
+    # Model configurations: (model_name_or_path, template_name)
+    model_configs = [
+        ("Qwen/Qwen2.5-0.5B-Instruct", "qwen1.5"),
+        ("microsoft/Phi-4-mini-instruct", "phi4")
+    ]
+    
     max_seq_length = 4096
     
-    logger.info(f"Starting dataset filtering...")
+    logger.info(f"Starting multi-model dataset filtering...")
     logger.info(f"Input file: {input_file}")
     logger.info(f"Output file: {output_file}")
-    logger.info(f"Model: {model_name_or_path}")
-    logger.info(f"Template: {template_name}")
+    logger.info(f"Models: {[config[0] for config in model_configs]}")
+    logger.info(f"Templates: {[config[1] for config in model_configs]}")
     logger.info(f"Max sequence length: {max_seq_length}")
     
     try:
-        filter_dataset(input_file, output_file, model_name_or_path, template_name, max_seq_length)
-        logger.info("✅ Filtering completed successfully!")
+        filter_dataset_multi_model(input_file, output_file, model_configs, max_seq_length)
+        logger.info("✅ Multi-model filtering completed successfully!")
+        logger.info(f"🎯 Data now satisfies token length requirements for both models:")
+        for model_name, template_name in model_configs:
+            logger.info(f"   - {model_name} (template: {template_name})")
     except Exception as e:
-        logger.error(f"❌ Filtering failed: {e}")
+        logger.error(f"❌ Multi-model filtering failed: {e}")
         sys.exit(1)
